@@ -1,21 +1,59 @@
-import pip
-pip.main(['install', 'pytelegrambotapi'])
-
+from flask import Flask, request, jsonify
+from threading import Thread
 import telebot
 from telebot import types
 import time
-from background import keep_alive, servers, pending_commands
 
-# === НАСТРОЙКИ ===
-BOT_TOKEN = "ВСТАВЬ_ТОКЕН_БОТА"
-ADMIN_IDS = [123456789]  # Твой Telegram ID
+# ============ FLASK СЕРВЕР ============
+app = Flask(__name__)
+
+# Хранилище данных
+servers = {}
+pending_commands = {}
+
+# ============ НАСТРОЙКИ ============
+BOT_TOKEN = "ВСТАВЬ_СВОЙ_ТОКЕН"
+ADMIN_IDS = [123456789]  # Замени на свой Telegram ID
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
-# === ГЛАВНОЕ МЕНЮ ===
+# ============ API ДЛЯ ROBLOX ============
+@app.route('/')
+def home():
+    return f"✅ Bot is alive! Servers: {len(servers)}"
+
+@app.route('/heartbeat', methods=['POST'])
+def heartbeat():
+    data = request.json
+    job_id = data['job_id']
+    servers[job_id] = {
+        "players": data['players'],
+        "player_count": data['player_count'],
+        "max_players": data['max_players']
+    }
+    commands = pending_commands.pop(job_id, [])
+    return jsonify({"commands": commands})
+
+@app.route('/player_joined', methods=['POST'])
+def player_joined():
+    data = request.json
+    job_id = data['job_id']
+    if job_id in servers:
+        servers[job_id]['players'][str(data['user_id'])] = data['username']
+    return jsonify({"status": "ok"})
+
+@app.route('/player_left', methods=['POST'])
+def player_left():
+    data = request.json
+    job_id = data['job_id']
+    if job_id in servers:
+        servers[job_id]['players'].pop(str(data['user_id']), None)
+    return jsonify({"status": "ok"})
+
+# ============ TELEGRAM БОТ ============
 @bot.message_handler(commands=['start', 'panel'])
 def start(message):
     if not is_admin(message.from_user.id):
@@ -29,7 +67,6 @@ def start(message):
     bot.send_message(message.chat.id, "🎮 **Панель управления Roblox**", 
                      reply_markup=markup, parse_mode='Markdown')
 
-# === ОБРАБОТКА КНОПОК ===
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     if not is_admin(call.from_user.id):
@@ -46,12 +83,11 @@ def callback_handler(call):
         
         markup = types.InlineKeyboardMarkup()
         for job_id, info in servers.items():
-            short_id = job_id[:8]
-            text = f"🖥 {short_id}... ({info['player_count']}/{info['max_players']})"
+            text = f"🖥 {job_id[:8]}... ({info['player_count']}/{info['max_players']})"
             markup.add(types.InlineKeyboardButton(text, callback_data=f"srv_{job_id}"))
         
         markup.add(types.InlineKeyboardButton("🔄 Обновить", callback_data="servers"))
-        markup.add(types.InlineKeyboardButton("◀️ Назад", callback_data="menu"))
+        markup.add(types.InlineKeyboardButton("◀️ Меню", callback_data="menu"))
         
         bot.edit_message_text(f"📋 **Серверов: {len(servers)}**",
                               call.message.chat.id, call.message.message_id,
@@ -131,7 +167,6 @@ def callback_handler(call):
         job_id = parts[1]
         user_id = parts[2]
         
-        # Бан на всех серверах
         for jid in servers.keys():
             if jid not in pending_commands:
                 pending_commands[jid] = []
@@ -146,7 +181,7 @@ def callback_handler(call):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("◀️ К серверам", callback_data="servers"))
         
-        bot.edit_message_text(f"🔨 **{username} забанен!**",
+        bot.edit_message_text(f"🔨 **{username} забанен везде!**",
                               call.message.chat.id, call.message.message_id,
                               reply_markup=markup, parse_mode='Markdown')
     
@@ -194,13 +229,21 @@ def search_player(message):
     bot.send_message(message.chat.id, f"🔍 **Найдено: {len(results)}**",
                      reply_markup=markup, parse_mode='Markdown')
 
-# === ЗАПУСК ===
-keep_alive()
-print("🤖 Бот запущен!")
+# ============ ЗАПУСК ============
+def run_bot():
+    print("🤖 Telegram бот запущен!")
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0)
+        except Exception as e:
+            print(f"Ошибка бота: {e}")
+            time.sleep(5)
 
-while True:
-    try:
-        bot.polling(none_stop=True, interval=0)
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        time.sleep(5)
+if __name__ == '__main__':
+    # Запускаем бота в отдельном потоке
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Запускаем Flask сервер
+    print("🌐 Flask сервер запущен!")
+    app.run(host='0.0.0.0', port=10000)
