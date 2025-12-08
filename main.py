@@ -12,8 +12,8 @@ servers = {}
 pending_commands = {}
 
 # ============ НАСТРОЙКИ ============
-BOT_TOKEN = "ВСТАВЬ_СВОЙ_ТОКЕН"
-ADMIN_IDS = [123456789]  # Замени на свой Telegram ID
+BOT_TOKEN = "7950194700:AAHeIfO6UwnCXnN8M200L4MfEdAmIhZs6r8"
+ADMIN_IDS = [8096475445]  # Замени на свой Telegram ID
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
