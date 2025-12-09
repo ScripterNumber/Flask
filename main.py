@@ -262,13 +262,15 @@ def search_player(message):
     bot.send_message(message.chat.id, f"Найдено: {len(results)}", reply_markup=markup)
 
 def run_bot():
-    print("Telegram bot started")
+    print("Telegram bot starting...")
+    time.sleep(5)
+    bot.remove_webhook()
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception as e:
             print(f"Bot error: {e}")
-            time.sleep(3)
+            time.sleep(10)
 
 if __name__ == '__main__':
     bot_thread = Thread(target=run_bot, daemon=True)
