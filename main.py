@@ -38,7 +38,10 @@ def player_joined():
     data = request.json
     job_id = data['job_id']
     if job_id in servers:
-        servers[job_id]['players'][str(data['user_id'])] = data['username']
+        servers[job_id]['players'][str(data['user_id'])] = {
+            "name": data['username'],
+            "display_name": data.get('display_name', data['username'])
+        }
     return jsonify({"status": "ok"})
 
 @app.route('/player_left', methods=['POST'])
@@ -55,11 +58,12 @@ def start(message):
         bot.reply_to(message, "Нет доступа")
         return
     
+    total_players = sum(info['player_count'] for info in servers.values())
+    
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Список серверов", callback_data="servers"))
     markup.add(types.InlineKeyboardButton("Найти игрока", callback_data="search"))
     
-    bot.send_message(message.chat.id, "Панель управления Roblox", reply_markup=markup)
+    bot.send_message(message.chat.id, f"Панель управления Roblox\n\nСерверов: {len(servers)}\nИгроков онлайн: {total_players}", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -68,45 +72,18 @@ def callback_handler(call):
     
     data = call.data
     
-    if data == "servers":
-        if not servers:
-            bot.edit_message_text("Нет активных серверов", call.message.chat.id, call.message.message_id)
-            return
-        
-        markup = types.InlineKeyboardMarkup()
-        for job_id, info in servers.items():
-            text = f"{job_id[:8]}... ({info['player_count']}/{info['max_players']})"
-            markup.add(types.InlineKeyboardButton(text, callback_data=f"srv_{job_id}"))
-        
-        markup.add(types.InlineKeyboardButton("Обновить", callback_data="servers"))
-        markup.add(types.InlineKeyboardButton("Назад", callback_data="menu"))
-        
-        bot.edit_message_text(f"Серверов: {len(servers)}", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    
-    elif data.startswith("srv_"):
-        job_id = data[4:]
-        
-        if job_id not in servers:
-            bot.answer_callback_query(call.id, "Сервер не найден")
-            return
-        
-        info = servers[job_id]
-        markup = types.InlineKeyboardMarkup()
-        
-        for user_id, username in info['players'].items():
-            markup.add(types.InlineKeyboardButton(username, callback_data=f"plr_{job_id}_{user_id}"))
-        
-        markup.add(types.InlineKeyboardButton("Обновить", callback_data=f"srv_{job_id}"))
-        markup.add(types.InlineKeyboardButton("К серверам", callback_data="servers"))
-        
-        bot.edit_message_text(f"Сервер: {job_id[:16]}...\nИгроков: {len(info['players'])}", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    
-    elif data.startswith("plr_"):
+    if data.startswith("plr_"):
         parts = data.split("_")
         job_id = parts[1]
         user_id = parts[2]
         
-        username = servers.get(job_id, {}).get('players', {}).get(user_id, "Unknown")
+        player_info = servers.get(job_id, {}).get('players', {}).get(user_id, {})
+        if isinstance(player_info, dict):
+            username = player_info.get('name', 'Unknown')
+            display_name = player_info.get('display_name', username)
+        else:
+            username = player_info
+            display_name = player_info
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("Кикнуть", callback_data=f"kick_{job_id}_{user_id}"))
@@ -116,9 +93,10 @@ def callback_handler(call):
         markup.add(types.InlineKeyboardButton("Разбанить", callback_data=f"unban_{job_id}_{user_id}"))
         markup.add(types.InlineKeyboardButton("Убить", callback_data=f"kill_{job_id}_{user_id}"))
         markup.add(types.InlineKeyboardButton("Дать веревку", callback_data=f"rope_{job_id}_{user_id}"))
-        markup.add(types.InlineKeyboardButton("Назад", callback_data=f"srv_{job_id}"))
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
         
-        bot.edit_message_text(f"Игрок: {username}\nID: {user_id}", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        text = f"Игрок: {display_name}\nНик: {username}\nID: {user_id}"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
     
     elif data.startswith("kick_"):
         parts = data.split("_")
@@ -134,12 +112,16 @@ def callback_handler(call):
             "reason": "Кикнут администратором"
         })
         
-        username = servers.get(job_id, {}).get('players', {}).get(user_id, "Unknown")
+        player_info = servers.get(job_id, {}).get('players', {}).get(user_id, {})
+        if isinstance(player_info, dict):
+            display_name = player_info.get('display_name', 'Unknown')
+        else:
+            display_name = player_info
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("К серверам", callback_data="servers"))
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
         
-        bot.edit_message_text(f"{username} будет кикнут", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"{display_name} будет кикнут", call.message.chat.id, call.message.message_id, reply_markup=markup)
     
     elif data.startswith("ban_"):
         parts = data.split("_")
@@ -157,7 +139,11 @@ def callback_handler(call):
                 "reason": "Забанен администратором"
             })
         
-        username = servers.get(job_id, {}).get('players', {}).get(user_id, "Unknown")
+        player_info = servers.get(job_id, {}).get('players', {}).get(user_id, {})
+        if isinstance(player_info, dict):
+            display_name = player_info.get('display_name', 'Unknown')
+        else:
+            display_name = player_info
         
         if duration == 0:
             ban_text = "навсегда"
@@ -165,9 +151,9 @@ def callback_handler(call):
             ban_text = f"на {duration} дн."
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("К серверам", callback_data="servers"))
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
         
-        bot.edit_message_text(f"{username} забанен {ban_text}", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"{display_name} забанен {ban_text}", call.message.chat.id, call.message.message_id, reply_markup=markup)
     
     elif data.startswith("unban_"):
         parts = data.split("_")
@@ -183,7 +169,7 @@ def callback_handler(call):
             })
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("К серверам", callback_data="servers"))
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
         
         bot.edit_message_text("Игрок разбанен", call.message.chat.id, call.message.message_id, reply_markup=markup)
     
@@ -200,12 +186,16 @@ def callback_handler(call):
             "user_id": int(user_id)
         })
         
-        username = servers.get(job_id, {}).get('players', {}).get(user_id, "Unknown")
+        player_info = servers.get(job_id, {}).get('players', {}).get(user_id, {})
+        if isinstance(player_info, dict):
+            display_name = player_info.get('display_name', 'Unknown')
+        else:
+            display_name = player_info
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("К серверам", callback_data="servers"))
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
         
-        bot.edit_message_text(f"{username} будет убит", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"{display_name} будет убит", call.message.chat.id, call.message.message_id, reply_markup=markup)
     
     elif data.startswith("rope_"):
         parts = data.split("_")
@@ -220,43 +210,59 @@ def callback_handler(call):
             "user_id": int(user_id)
         })
         
-        username = servers.get(job_id, {}).get('players', {}).get(user_id, "Unknown")
+        player_info = servers.get(job_id, {}).get('players', {}).get(user_id, {})
+        if isinstance(player_info, dict):
+            display_name = player_info.get('display_name', 'Unknown')
+        else:
+            display_name = player_info
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("К серверам", callback_data="servers"))
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
         
-        bot.edit_message_text(f"{username} получит веревку", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"{display_name} получит веревку", call.message.chat.id, call.message.message_id, reply_markup=markup)
     
     elif data == "menu":
+        total_players = sum(info['player_count'] for info in servers.values())
+        
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Список серверов", callback_data="servers"))
         markup.add(types.InlineKeyboardButton("Найти игрока", callback_data="search"))
         
-        bot.edit_message_text("Панель управления Roblox", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"Панель управления Roblox\n\nСерверов: {len(servers)}\nИгроков онлайн: {total_players}", call.message.chat.id, call.message.message_id, reply_markup=markup)
     
     elif data == "search":
-        msg = bot.edit_message_text("Введите ник игрока:", call.message.chat.id, call.message.message_id)
+        msg = bot.edit_message_text("Введите ник или DisplayName игрока:", call.message.chat.id, call.message.message_id)
         bot.register_next_step_handler(msg, search_player)
 
 def search_player(message):
     if not is_admin(message.from_user.id):
         return
     
-    search_name = message.text.lower()
+    search_text = message.text.lower()
     results = []
     
     for job_id, info in servers.items():
-        for user_id, username in info['players'].items():
-            if search_name in username.lower():
-                results.append((job_id, user_id, username))
+        for user_id, player_info in info['players'].items():
+            if isinstance(player_info, dict):
+                name = player_info.get('name', '').lower()
+                display_name = player_info.get('display_name', '').lower()
+                show_name = player_info.get('display_name', player_info.get('name', 'Unknown'))
+            else:
+                name = player_info.lower()
+                display_name = player_info.lower()
+                show_name = player_info
+            
+            if search_text in name or search_text in display_name:
+                results.append((job_id, user_id, show_name))
     
     if not results:
-        bot.reply_to(message, "Игрок не найден")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
+        bot.send_message(message.chat.id, "Игрок не найден", reply_markup=markup)
         return
     
     markup = types.InlineKeyboardMarkup()
-    for job_id, user_id, username in results:
-        markup.add(types.InlineKeyboardButton(f"{username} ({job_id[:8]}...)", callback_data=f"plr_{job_id}_{user_id}"))
+    for job_id, user_id, show_name in results:
+        markup.add(types.InlineKeyboardButton(show_name, callback_data=f"plr_{job_id}_{user_id}"))
     markup.add(types.InlineKeyboardButton("Меню", callback_data="menu"))
     
     bot.send_message(message.chat.id, f"Найдено: {len(results)}", reply_markup=markup)
