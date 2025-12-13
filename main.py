@@ -3,6 +3,8 @@ from threading import Thread
 import telebot
 from telebot import types
 import time
+import json
+import os
 
 app = Flask(__name__)
 
@@ -11,14 +13,47 @@ pending_commands = {}
 user_states = {}
 
 BOT_TOKEN = "7950194700:AAHeIfO6UwnCXnN8M200L4MfEdAmIhZs6r8"
-ADMIN_IDS = [8096475445]
+
+OWNER_IDS = [8096475445, 8220513089]
+
+ADMINS_FILE = "admins.json"
+
+def load_admins():
+    if os.path.exists(ADMINS_FILE):
+        try:
+            with open(ADMINS_FILE, 'r') as f:
+                data = json.load(f)
+                return set(data.get('ids', [])), set(data.get('usernames', []))
+        except:
+            pass
+    return set(OWNER_IDS), set()
+
+def save_admins(admin_ids, admin_usernames):
+    with open(ADMINS_FILE, 'w') as f:
+        json.dump({
+            'ids': list(admin_ids),
+            'usernames': list(admin_usernames)
+        }, f)
+
+admin_ids, admin_usernames = load_admins()
+for owner_id in OWNER_IDS:
+    admin_ids.add(owner_id)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 SERVER_TIMEOUT = 15
 
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
+def is_admin(user_id, username=None):
+    if user_id in admin_ids:
+        return True
+    if username and username.lower() in [u.lower() for u in admin_usernames]:
+        admin_ids.add(user_id)
+        save_admins(admin_ids, admin_usernames)
+        return True
+    return False
+
+def is_owner(user_id):
+    return user_id in OWNER_IDS
 
 def cleanup_servers():
     current_time = time.time()
@@ -95,8 +130,9 @@ def get_server_name(job_id):
 
 @bot.message_handler(commands=['start', 'panel'])
 def start(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "Нет доступа")
+    username = message.from_user.username
+    if not is_admin(message.from_user.id, username):
+        bot.reply_to(message, "❌ Нет доступа")
         return
     
     active = get_active_servers()
@@ -104,6 +140,9 @@ def start(message):
     
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🔍 Найти игрока", callback_data="search"))
+    
+    if is_owner(message.from_user.id):
+        markup.add(types.InlineKeyboardButton("👑 Управление админами", callback_data="admin_manage"))
     
     bot.send_message(
         message.chat.id,
@@ -113,7 +152,8 @@ def start(message):
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states)
 def handle_input(message):
-    if not is_admin(message.from_user.id):
+    username = message.from_user.username
+    if not is_admin(message.from_user.id, username):
         return
     
     state = user_states.pop(message.from_user.id, None)
@@ -207,17 +247,151 @@ def handle_input(message):
             f"🪙 {display_name} теперь имеет {coins} монет",
             reply_markup=markup
         )
+    
+    elif action == 'add_admin':
+        text = message.text.strip()
+        
+        if text.startswith('@'):
+            new_username = text[1:]
+            admin_usernames.add(new_username.lower())
+            save_admins(admin_ids, admin_usernames)
+            result_text = f"✅ Админ @{new_username} добавлен"
+        else:
+            try:
+                new_id = int(text)
+                admin_ids.add(new_id)
+                save_admins(admin_ids, admin_usernames)
+                result_text = f"✅ Админ с ID {new_id} добавлен"
+            except ValueError:
+                admin_usernames.add(text.lower())
+                save_admins(admin_ids, admin_usernames)
+                result_text = f"✅ Админ @{text} добавлен"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ К админам", callback_data="admin_manage"))
+        markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
+        
+        bot.send_message(message.chat.id, result_text, reply_markup=markup)
+    
+    elif action == 'remove_admin':
+        text = message.text.strip()
+        removed = False
+        
+        if text.startswith('@'):
+            username_to_remove = text[1:].lower()
+            if username_to_remove in [u.lower() for u in admin_usernames]:
+                admin_usernames.discard(username_to_remove)
+                save_admins(admin_ids, admin_usernames)
+                removed = True
+                result_text = f"✅ Админ @{username_to_remove} удалён"
+        else:
+            try:
+                id_to_remove = int(text)
+                if id_to_remove in OWNER_IDS:
+                    result_text = "❌ Нельзя удалить владельца!"
+                elif id_to_remove in admin_ids:
+                    admin_ids.discard(id_to_remove)
+                    save_admins(admin_ids, admin_usernames)
+                    removed = True
+                    result_text = f"✅ Админ с ID {id_to_remove} удалён"
+                else:
+                    result_text = "❌ Админ не найден"
+            except ValueError:
+                username_to_remove = text.lower()
+                if username_to_remove in [u.lower() for u in admin_usernames]:
+                    admin_usernames.discard(username_to_remove)
+                    save_admins(admin_ids, admin_usernames)
+                    removed = True
+                    result_text = f"✅ Админ @{username_to_remove} удалён"
+                else:
+                    result_text = "❌ Админ не найден"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ К админам", callback_data="admin_manage"))
+        markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
+        
+        bot.send_message(message.chat.id, result_text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    if not is_admin(call.from_user.id):
+    username = call.from_user.username
+    if not is_admin(call.from_user.id, username):
         return
     
     user_states.pop(call.from_user.id, None)
     
     data = call.data
     
-    if data.startswith("plr_"):
+    if data == "admin_manage":
+        if not is_owner(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Только для владельцев!")
+            return
+        
+        show_admin_management(call)
+    
+    elif data == "admin_add":
+        if not is_owner(call.from_user.id):
+            return
+        
+        user_states[call.from_user.id] = {'action': 'add_admin'}
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="admin_manage"))
+        
+        bot.edit_message_text(
+            "➕ Введите @username или ID нового админа:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    
+    elif data == "admin_remove":
+        if not is_owner(call.from_user.id):
+            return
+        
+        user_states[call.from_user.id] = {'action': 'remove_admin'}
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="admin_manage"))
+        
+        bot.edit_message_text(
+            "➖ Введите @username или ID админа для удаления:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    
+    elif data == "admin_list":
+        if not is_owner(call.from_user.id):
+            return
+        
+        text = "👑 Список администраторов:\n\n"
+        text += "🔒 Владельцы (нельзя удалить):\n"
+        for oid in OWNER_IDS:
+            text += f"  • ID: {oid}\n"
+        
+        non_owner_ids = [aid for aid in admin_ids if aid not in OWNER_IDS]
+        if non_owner_ids:
+            text += "\n👤 Админы по ID:\n"
+            for aid in non_owner_ids:
+                text += f"  • {aid}\n"
+        
+        if admin_usernames:
+            text += "\n👤 Админы по username:\n"
+            for uname in admin_usernames:
+                text += f"  • @{uname}\n"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage"))
+        
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    
+    elif data.startswith("plr_"):
         parts = data.split("_")
         job_id = parts[1]
         user_id = parts[2]
@@ -487,6 +661,9 @@ def callback_handler(call):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔍 Найти игрока", callback_data="search"))
         
+        if is_owner(call.from_user.id):
+            markup.add(types.InlineKeyboardButton("👑 Управление админами", callback_data="admin_manage"))
+        
         bot.edit_message_text(
             f"🎮 Панель управления Roblox\n\n📡 Серверов: {len(active)}\n👥 Игроков онлайн: {total_players}",
             call.message.chat.id,
@@ -501,6 +678,24 @@ def callback_handler(call):
             call.message.message_id
         )
         bot.register_next_step_handler(msg, search_player)
+
+def show_admin_management(call):
+    admin_count = len(admin_ids) + len(admin_usernames) - len([u for u in admin_usernames if any(is_admin(aid, u) for aid in admin_ids)])
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("➕ Добавить админа", callback_data="admin_add"))
+    markup.add(types.InlineKeyboardButton("➖ Удалить админа", callback_data="admin_remove"))
+    markup.add(types.InlineKeyboardButton("📋 Список админов", callback_data="admin_list"))
+    markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
+    
+    bot.edit_message_text(
+        f"👑 Управление администраторами\n\n"
+        f"📊 Всего админов по ID: {len(admin_ids)}\n"
+        f"📊 Всего админов по username: {len(admin_usernames)}",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
 
 def get_player_display_name(job_id, user_id):
     active = get_active_servers()
@@ -582,7 +777,8 @@ def show_server_actions(call, job_id, user_id):
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 def search_player(message):
-    if not is_admin(message.from_user.id):
+    username = message.from_user.username
+    if not is_admin(message.from_user.id, username):
         return
     
     search_text = message.text.lower()
