@@ -8,6 +8,7 @@ app = Flask(__name__)
 
 servers = {}
 pending_commands = {}
+user_states = {}
 
 BOT_TOKEN = "7950194700:AAHeIfO6UwnCXnN8M200L4MfEdAmIhZs6r8"
 ADMIN_IDS = [8096475445]
@@ -110,10 +111,109 @@ def start(message):
         reply_markup=markup
     )
 
+@bot.message_handler(func=lambda message: message.from_user.id in user_states)
+def handle_input(message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    state = user_states.pop(message.from_user.id, None)
+    if not state:
+        return
+    
+    action = state.get('action')
+    job_id = state.get('job_id')
+    user_id = state.get('user_id')
+    
+    if action == 'give_item':
+        item_name = message.text.strip()
+        
+        if job_id not in pending_commands:
+            pending_commands[job_id] = []
+        
+        pending_commands[job_id].append({
+            "action": "give_item",
+            "user_id": int(user_id),
+            "item_name": item_name
+        })
+        
+        display_name = get_player_display_name(job_id, user_id)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ К игроку", callback_data=f"plrp2_{job_id}_{user_id}"))
+        markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
+        
+        bot.send_message(
+            message.chat.id,
+            f"🎁 {display_name} получит предмет: {item_name}",
+            reply_markup=markup
+        )
+    
+    elif action == 'set_deaths':
+        try:
+            deaths = int(message.text.strip())
+        except ValueError:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ К игроку", callback_data=f"plrp2_{job_id}_{user_id}"))
+            bot.send_message(message.chat.id, "❌ Введите число!", reply_markup=markup)
+            return
+        
+        if job_id not in pending_commands:
+            pending_commands[job_id] = []
+        
+        pending_commands[job_id].append({
+            "action": "set_deaths",
+            "user_id": int(user_id),
+            "value": deaths
+        })
+        
+        display_name = get_player_display_name(job_id, user_id)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ К игроку", callback_data=f"plrp2_{job_id}_{user_id}"))
+        markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
+        
+        bot.send_message(
+            message.chat.id,
+            f"💀 {display_name} теперь имеет {deaths} смертей",
+            reply_markup=markup
+        )
+    
+    elif action == 'set_coins':
+        try:
+            coins = int(message.text.strip())
+        except ValueError:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ К игроку", callback_data=f"plrp2_{job_id}_{user_id}"))
+            bot.send_message(message.chat.id, "❌ Введите число!", reply_markup=markup)
+            return
+        
+        if job_id not in pending_commands:
+            pending_commands[job_id] = []
+        
+        pending_commands[job_id].append({
+            "action": "set_coins",
+            "user_id": int(user_id),
+            "value": coins
+        })
+        
+        display_name = get_player_display_name(job_id, user_id)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ К игроку", callback_data=f"plrp2_{job_id}_{user_id}"))
+        markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
+        
+        bot.send_message(
+            message.chat.id,
+            f"🪙 {display_name} теперь имеет {coins} монет",
+            reply_markup=markup
+        )
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     if not is_admin(call.from_user.id):
         return
+    
+    user_states.pop(call.from_user.id, None)
     
     data = call.data
     
@@ -153,6 +253,69 @@ def callback_handler(call):
         
         bot.edit_message_text(
             "💀 Все игроки на сервере будут убиты",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    
+    elif data.startswith("giveitem_"):
+        parts = data.split("_")
+        job_id = parts[1]
+        user_id = parts[2]
+        
+        user_states[call.from_user.id] = {
+            'action': 'give_item',
+            'job_id': job_id,
+            'user_id': user_id
+        }
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data=f"plrp2_{job_id}_{user_id}"))
+        
+        bot.edit_message_text(
+            "🎁 Введите название предмета из ServerStorage._items:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    
+    elif data.startswith("setdeaths_"):
+        parts = data.split("_")
+        job_id = parts[1]
+        user_id = parts[2]
+        
+        user_states[call.from_user.id] = {
+            'action': 'set_deaths',
+            'job_id': job_id,
+            'user_id': user_id
+        }
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data=f"plrp2_{job_id}_{user_id}"))
+        
+        bot.edit_message_text(
+            "💀 Введите количество смертей:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    
+    elif data.startswith("setcoins_"):
+        parts = data.split("_")
+        job_id = parts[1]
+        user_id = parts[2]
+        
+        user_states[call.from_user.id] = {
+            'action': 'set_coins',
+            'job_id': job_id,
+            'user_id': user_id
+        }
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data=f"plrp2_{job_id}_{user_id}"))
+        
+        bot.edit_message_text(
+            "🪙 Введите количество монет:",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
@@ -393,6 +556,9 @@ def show_player_page2(call, job_id, user_id):
     
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("📮 Превратить в амогуса", callback_data=f"amogus_{job_id}_{user_id}"))
+    markup.add(types.InlineKeyboardButton("🎁 Выдать предмет", callback_data=f"giveitem_{job_id}_{user_id}"))
+    markup.add(types.InlineKeyboardButton("💀 Установить смерти", callback_data=f"setdeaths_{job_id}_{user_id}"))
+    markup.add(types.InlineKeyboardButton("🪙 Выдать монеты", callback_data=f"setcoins_{job_id}_{user_id}"))
     markup.add(types.InlineKeyboardButton("🏠 Меню", callback_data="menu"))
     markup.add(types.InlineKeyboardButton("⬅️", callback_data=f"plr_{job_id}_{user_id}"))
     
