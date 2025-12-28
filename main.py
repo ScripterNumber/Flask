@@ -96,17 +96,15 @@ def find_target_user(message):
     
     if message.reply_to_message:
         reply_user = message.reply_to_message.from_user
-        if reply_user.id != message.from_user.id:
-            return get_user_mention(reply_user)
+        return get_user_mention(reply_user)
     
     if chat_id in last_messages:
         last_info = last_messages[chat_id]
-        if last_info['user_id'] != message.from_user.id:
-            if last_info.get('username'):
-                return f"@{last_info['username']}"
-            return last_info.get('first_name', 'кого-то')
+        if last_info.get('username'):
+            return f"@{last_info['username']}"
+        return last_info.get('first_name', None)
     
-    return "себя"
+    return None
 
 @app.route('/')
 def home():
@@ -131,7 +129,7 @@ def cmd_start(message):
     
     bot.send_message(
         message.chat.id,
-        f"👋 Дарова, {message.from_user.first_name}!\n\nЯ бот с триггерами для RP действий.\n\n📊 Активных триггеров: {len(triggers)}",
+        f"👋 Привет, {message.from_user.first_name}!\n\nЯ бот с триггерами для RP действий.\n\n📊 Активных триггеров: {len(triggers)}",
         reply_markup=markup
     )
 
@@ -262,10 +260,9 @@ def handle_message(message):
     
     if triggered_word:
         target = find_target_user(message)
-        sender_name = sender.first_name
-        response = response_template.replace("%user%", target)
-        full_response = f"{sender_name} {response}"
-        bot.send_message(chat_id, full_response)
+        if target:
+            response = response_template.replace("%user%", target)
+            bot.send_message(chat_id, response)
     
     last_messages[chat_id] = {
         "user_id": sender.id,
