@@ -17,15 +17,24 @@ DATA_FILE = "brain.json"
 ADMINS_FILE = "admins.json"
 SETTINGS_FILE = "settings.json"
 
+chains = {}
+replies = {}
+all_words = set()
+admin_ids = set()
+settings = {}
+last_save = time.time()
+
 def load_brain():
+    global chains, replies, all_words
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data.get('chains', {}), data.get('replies', {}), data.get('words', [])
+                chains = data.get('chains', {})
+                replies = data.get('replies', {})
+                all_words = set(data.get('words', []))
         except:
             pass
-    return {}, {}, []
 
 def save_brain():
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -36,42 +45,44 @@ def save_brain():
         }, f, ensure_ascii=False)
 
 def load_admins():
+    global admin_ids
     if os.path.exists(ADMINS_FILE):
         try:
             with open(ADMINS_FILE, 'r') as f:
                 data = json.load(f)
-                return set(data.get('ids', OWNER_IDS))
+                admin_ids = set(data.get('ids', OWNER_IDS))
         except:
-            pass
-    return set(OWNER_IDS)
+            admin_ids = set(OWNER_IDS)
+    else:
+        admin_ids = set(OWNER_IDS)
 
 def save_admins():
     with open(ADMINS_FILE, 'w') as f:
         json.dump({'ids': list(admin_ids)}, f)
 
 def load_settings():
+    global settings
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, 'r') as f:
-                return json.load(f)
+                settings = json.load(f)
         except:
-            pass
-    return {'reply_chance': 15, 'learn': True, 'min_words': 2}
+            settings = {'reply_chance': 15, 'learn': True, 'min_words': 2}
+    else:
+        settings = {'reply_chance': 15, 'learn': True, 'min_words': 2}
 
 def save_settings():
     with open(SETTINGS_FILE, 'w') as f:
         json.dump(settings, f)
 
-chains, replies, words_list = load_brain()
-all_words = set(words_list)
-admin_ids = load_admins()
-settings = load_settings()
+load_brain()
+load_admins()
+load_settings()
 
 for oid in OWNER_IDS:
     admin_ids.add(oid)
 
 bot = telebot.TeleBot(BOT_TOKEN)
-last_save = time.time()
 
 def is_admin(user_id):
     return user_id in admin_ids
@@ -145,11 +156,13 @@ def generate_response(seed_text=None):
     
     if seed_text:
         seed_words = tokenize(seed_text)
+        start_word = None
         for word in seed_words:
             if word in chains and chains[word]:
                 start_word = word
                 break
-        else:
+        
+        if not start_word:
             if '_start' in chains and chains['_start']:
                 start_word = weighted_choice(chains['_start'])
             else:
@@ -158,9 +171,10 @@ def generate_response(seed_text=None):
         if '_start' in chains and chains['_start']:
             start_word = weighted_choice(chains['_start'])
         else:
-            start_word = random.choice(list(chains.keys()))
-            if start_word == '_start':
+            keys = [k for k in chains.keys() if k != '_start']
+            if not keys:
                 return None
+            start_word = random.choice(keys)
     
     result = [start_word]
     current = start_word
@@ -227,6 +241,13 @@ def maybe_save():
     if time.time() - last_save > 60:
         save_brain()
         last_save = time.time()
+
+def reset_brain():
+    global chains, replies, all_words
+    chains = {}
+    replies = {}
+    all_words = set()
+    save_brain()
 
 @app.route('/')
 def home():
@@ -314,11 +335,7 @@ def cmd_reset(message):
     if not is_owner(message.from_user.id):
         return
     
-    global chains, replies, all_words
-    chains = {}
-    replies = {}
-    all_words = set()
-    save_brain()
+    reset_brain()
     bot.send_message(message.chat.id, "🗑 Память очищена")
 
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'), content_types=['text'])
@@ -389,7 +406,6 @@ def callback_handler(call):
         
         learn_status = "✅" if settings.get('learn', True) else "❌"
         markup.add(types.InlineKeyboardButton(f"📚 Обучение: {learn_status}", callback_data="toggle_learn"))
-        
         markup.add(types.InlineKeyboardButton(f"🎲 Шанс: {settings.get('reply_chance', 15)}%", callback_data="show_chance"))
         
         if is_owner(user_id):
@@ -450,11 +466,7 @@ def callback_handler(call):
         if not is_owner(user_id):
             return
         
-        global chains, replies, all_words
-        chains = {}
-        replies = {}
-        all_words = set()
-        save_brain()
+        reset_brain()
         
         bot.answer_callback_query(call.id, "🗑 Память очищена")
         
