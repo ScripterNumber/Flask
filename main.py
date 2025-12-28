@@ -5,54 +5,35 @@ from telebot import types
 import time
 import json
 import os
+import random
 import re
 
 app = Flask(__name__)
 
 BOT_TOKEN = "7950194700:AAHeIfO6UwnCXnN8M200L4MfEdAmIhZs6r8"
 OWNER_IDS = [8096475445, 8220513089]
-TRIGGERS_FILE = "triggers.json"
+
+DATA_FILE = "brain.json"
 ADMINS_FILE = "admins.json"
+SETTINGS_FILE = "settings.json"
 
-last_messages = {}
-user_states = {}
-
-def load_triggers():
-    if os.path.exists(TRIGGERS_FILE):
+def load_brain():
+    if os.path.exists(DATA_FILE):
         try:
-            with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('chains', {}), data.get('replies', {}), data.get('words', [])
         except:
             pass
-    return {
-        "привет": "Поприветствовал %user%! 👋",
-        "пока": "Попрощался с %user%! 👋",
-        "люблю": "Признался в любви %user%! ❤️",
-        "ненавижу": "Выразил ненависть к %user%! 😤",
-        "обнял": "Обнял %user%! 🤗",
-        "ударил": "Ударил %user%! 👊",
-        "поцеловал": "Поцеловал %user%! 😘",
-        "укусил": "Укусил %user%! 🦷",
-        "пнул": "Пнул %user%! 🦶",
-        "убил": "Убил %user%! ☠️",
-        "воскресил": "Воскресил %user%! ✨",
-        "погладил": "Погладил %user%! 🥰",
-        "шлёпнул": "Шлёпнул %user%! 👏",
-        "выебать": "выебал %user% жестка",
-        "витеб": "ты витеб %user%",
-        "хуем": "хуем тя %user%",
-        "усыканик": "ты бля усыкуха %user%",
-        "шлёпнул": "Шлёпнул %user%",
-        "ебать": "тя чё ебу или ебать %user%",
-        "анус": "у тя анус воняет %user%",
-        "урон": "урон в анус те %user%",
-        "азартный": "азартный анус ебливый",
-        "внатуре": "слыш ты внатуре или чё %user%! 🙏"
-    }
+    return {}, {}, []
 
-def save_triggers():
-    with open(TRIGGERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(triggers, f, ensure_ascii=False, indent=2)
+def save_brain():
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump({
+            'chains': chains,
+            'replies': replies,
+            'words': list(all_words)[-10000:]
+        }, f, ensure_ascii=False)
 
 def load_admins():
     if os.path.exists(ADMINS_FILE):
@@ -68,12 +49,29 @@ def save_admins():
     with open(ADMINS_FILE, 'w') as f:
         json.dump({'ids': list(admin_ids)}, f)
 
-triggers = load_triggers()
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {'reply_chance': 15, 'learn': True, 'min_words': 2}
+
+def save_settings():
+    with open(SETTINGS_FILE, 'w') as f:
+        json.dump(settings, f)
+
+chains, replies, words_list = load_brain()
+all_words = set(words_list)
 admin_ids = load_admins()
+settings = load_settings()
+
 for oid in OWNER_IDS:
     admin_ids.add(oid)
 
 bot = telebot.TeleBot(BOT_TOKEN)
+last_save = time.time()
 
 def is_admin(user_id):
     return user_id in admin_ids
@@ -81,34 +79,158 @@ def is_admin(user_id):
 def is_owner(user_id):
     return user_id in OWNER_IDS
 
-def get_user_mention(user):
-    if user.username:
-        return f"@{user.username}"
-    return user.first_name
+def clean_text(text):
+    text = re.sub(r'http\S+', '', text)
+    text = re.sub(r'@\w+', '', text)
+    text = text.lower().strip()
+    return text
 
-def find_target_user(message):
-    chat_id = message.chat.id
-    text = message.text
+def tokenize(text):
+    text = clean_text(text)
+    words = re.findall(r'[а-яёa-z0-9]+|[.!?]', text)
+    return words
+
+def learn_message(text):
+    if not settings.get('learn', True):
+        return
     
-    mention_match = re.search(r'@(\w+)', text)
-    if mention_match:
-        return f"@{mention_match.group(1)}"
+    words = tokenize(text)
+    if len(words) < settings.get('min_words', 2):
+        return
     
-    if message.reply_to_message:
-        reply_user = message.reply_to_message.from_user
-        return get_user_mention(reply_user)
+    for word in words:
+        all_words.add(word)
     
-    if chat_id in last_messages:
-        last_info = last_messages[chat_id]
-        if last_info.get('username'):
-            return f"@{last_info['username']}"
-        return last_info.get('first_name', None)
+    for i in range(len(words) - 1):
+        word = words[i]
+        next_word = words[i + 1]
+        
+        if word not in chains:
+            chains[word] = {}
+        
+        if next_word not in chains[word]:
+            chains[word][next_word] = 0
+        
+        chains[word][next_word] += 1
+    
+    if len(words) >= 2:
+        first_word = words[0]
+        if '_start' not in chains:
+            chains['_start'] = {}
+        if first_word not in chains['_start']:
+            chains['_start'][first_word] = 0
+        chains['_start'][first_word] += 1
+
+def learn_reply(trigger_text, reply_text):
+    if not settings.get('learn', True):
+        return
+    
+    trigger_words = tokenize(trigger_text)
+    if not trigger_words:
+        return
+    
+    key = ' '.join(trigger_words[:3])
+    
+    if key not in replies:
+        replies[key] = []
+    
+    if reply_text not in replies[key]:
+        replies[key].append(reply_text)
+        if len(replies[key]) > 20:
+            replies[key] = replies[key][-20:]
+
+def generate_response(seed_text=None):
+    if not chains:
+        return None
+    
+    if seed_text:
+        seed_words = tokenize(seed_text)
+        for word in seed_words:
+            if word in chains and chains[word]:
+                start_word = word
+                break
+        else:
+            if '_start' in chains and chains['_start']:
+                start_word = weighted_choice(chains['_start'])
+            else:
+                return None
+    else:
+        if '_start' in chains and chains['_start']:
+            start_word = weighted_choice(chains['_start'])
+        else:
+            start_word = random.choice(list(chains.keys()))
+            if start_word == '_start':
+                return None
+    
+    result = [start_word]
+    current = start_word
+    
+    max_len = random.randint(3, 15)
+    
+    for _ in range(max_len):
+        if current not in chains or not chains[current]:
+            break
+        
+        next_word = weighted_choice(chains[current])
+        
+        if next_word in '.!?':
+            result.append(next_word)
+            if random.random() < 0.7:
+                break
+        else:
+            result.append(next_word)
+        
+        current = next_word
+    
+    if len(result) < 2:
+        return None
+    
+    text = ' '.join(result)
+    text = re.sub(r' ([.!?])', r'\1', text)
+    text = text.strip()
+    
+    if text and text[0].isalpha():
+        text = text[0].upper() + text[1:]
+    
+    return text
+
+def weighted_choice(choices_dict):
+    total = sum(choices_dict.values())
+    r = random.uniform(0, total)
+    cumsum = 0
+    for choice, weight in choices_dict.items():
+        cumsum += weight
+        if r <= cumsum:
+            return choice
+    return random.choice(list(choices_dict.keys()))
+
+def find_reply(text):
+    words = tokenize(text)
+    if not words:
+        return None
+    
+    key = ' '.join(words[:3])
+    if key in replies and replies[key]:
+        return random.choice(replies[key])
+    
+    for k, v in replies.items():
+        k_words = k.split()
+        for word in words:
+            if word in k_words and v:
+                if random.random() < 0.3:
+                    return random.choice(v)
     
     return None
 
+def maybe_save():
+    global last_save
+    if time.time() - last_save > 60:
+        save_brain()
+        last_save = time.time()
+
 @app.route('/')
 def home():
-    return f"Trigger Bot Online! Triggers: {len(triggers)}"
+    return f"Sglipa Bot Online! Words: {len(all_words)}, Chains: {len(chains)}"
 
 @app.route('/ping')
 def ping():
@@ -120,349 +242,248 @@ def health():
 
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
+    if message.chat.type != 'private':
+        return
+    
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("📋 Список триггеров", callback_data="triggers_list"))
-    markup.add(types.InlineKeyboardButton("❓ Как пользоваться", callback_data="help"))
+    markup.add(types.InlineKeyboardButton("📊 Статистика", callback_data="stats"))
     
     if is_admin(message.from_user.id):
-        markup.add(types.InlineKeyboardButton("⚙️ Управление", callback_data="admin_panel"))
+        markup.add(types.InlineKeyboardButton("⚙️ Настройки", callback_data="settings"))
     
     bot.send_message(
         message.chat.id,
-        f"👋 Привет, {message.from_user.first_name}!\n\nЯ бот с триггерами для RP действий.\n\n📊 Активных триггеров: {len(triggers)}",
+        f"🧠 Привет! Я учусь на сообщениях в чатах и иногда отвечаю.\n\n"
+        f"📝 Выучено слов: {len(all_words)}\n"
+        f"🔗 Связей: {len(chains)}\n"
+        f"💬 Шаблонов ответов: {len(replies)}",
         reply_markup=markup
     )
 
-@bot.message_handler(commands=['triggers', 'list'])
-def cmd_triggers(message):
-    show_triggers_list(message.chat.id, None, is_callback=False)
+@bot.message_handler(commands=['stats'])
+def cmd_stats(message):
+    bot.send_message(
+        message.chat.id,
+        f"📊 Статистика:\n\n"
+        f"📝 Слов: {len(all_words)}\n"
+        f"🔗 Связей: {len(chains)}\n"
+        f"💬 Шаблонов: {len(replies)}\n"
+        f"🎲 Шанс ответа: {settings.get('reply_chance', 15)}%"
+    )
 
-@bot.message_handler(commands=['help'])
-def cmd_help(message):
-    help_text = """❓ Как пользоваться:
+@bot.message_handler(commands=['say'])
+def cmd_say(message):
+    text = message.text.replace('/say', '').strip()
+    response = generate_response(text if text else None)
+    if response:
+        bot.send_message(message.chat.id, response)
+    else:
+        bot.send_message(message.chat.id, "🤷 Ещё не научился говорить...")
 
-1. Ответ на сообщение:
-Ответьте на чьё-то сообщение триггером
-
-2. Упоминание:
-обнял @username
-
-3. Последний в чате:
-Просто напишите триггер — цель будет последний писавший
-
-Команды:
-/triggers — список триггеров
-/help — эта справка"""
-    bot.send_message(message.chat.id, help_text)
-
-@bot.message_handler(func=lambda m: m.from_user.id in user_states and m.text and not m.text.startswith('/'))
-def handle_state_input(message):
-    user_id = message.from_user.id
-    state = user_states.get(user_id)
-    
-    if not state:
+@bot.message_handler(commands=['chance'])
+def cmd_chance(message):
+    if not is_admin(message.from_user.id):
         return
     
-    action = state.get('action')
-    
-    if action == 'add_trigger_word':
-        trigger_word = message.text.strip().lower()
-        user_states[user_id] = {
-            'action': 'add_trigger_response',
-            'word': trigger_word
-        }
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="admin_panel"))
-        
-        bot.send_message(
-            message.chat.id,
-            f"Слово: {trigger_word}\n\nТеперь введите ответ. Используйте %user% для упоминания цели.\n\nПример: Обнял %user%! 🤗",
-            reply_markup=markup
-        )
-    
-    elif action == 'add_trigger_response':
-        trigger_word = state.get('word')
-        response = message.text.strip()
-        
-        triggers[trigger_word] = response
-        save_triggers()
-        
-        del user_states[user_id]
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ К управлению", callback_data="admin_panel"))
-        
-        bot.send_message(
-            message.chat.id,
-            f"✅ Триггер добавлен!\n\nСлово: {trigger_word}\nОтвет: {response}",
-            reply_markup=markup
-        )
-    
-    elif action == 'add_admin':
-        del user_states[user_id]
-        
-        if message.forward_from:
-            new_admin_id = message.forward_from.id
-        else:
-            try:
-                new_admin_id = int(message.text.strip())
-            except ValueError:
-                bot.send_message(message.chat.id, "❌ Неверный формат ID")
-                return
-        
-        admin_ids.add(new_admin_id)
-        save_admins()
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admins"))
-        
-        bot.send_message(message.chat.id, f"✅ Админ {new_admin_id} добавлен!", reply_markup=markup)
-    
-    elif action == 'remove_admin':
-        del user_states[user_id]
-        
+    parts = message.text.split()
+    if len(parts) > 1:
         try:
-            admin_to_remove = int(message.text.strip())
-        except ValueError:
-            bot.send_message(message.chat.id, "❌ Неверный формат ID")
-            return
-        
-        if admin_to_remove in OWNER_IDS:
-            result = "❌ Нельзя удалить владельца!"
-        elif admin_to_remove in admin_ids:
-            admin_ids.discard(admin_to_remove)
-            save_admins()
-            result = f"✅ Админ {admin_to_remove} удалён!"
-        else:
-            result = "❌ Админ не найден"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admins"))
-        
-        bot.send_message(message.chat.id, result, reply_markup=markup)
+            new_chance = int(parts[1])
+            new_chance = max(0, min(100, new_chance))
+            settings['reply_chance'] = new_chance
+            save_settings()
+            bot.send_message(message.chat.id, f"✅ Шанс ответа: {new_chance}%")
+        except:
+            bot.send_message(message.chat.id, f"🎲 Текущий шанс: {settings.get('reply_chance', 15)}%\n\nИспользуй: /chance 20")
+    else:
+        bot.send_message(message.chat.id, f"🎲 Текущий шанс: {settings.get('reply_chance', 15)}%\n\nИспользуй: /chance 20")
+
+@bot.message_handler(commands=['learn'])
+def cmd_learn(message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    settings['learn'] = not settings.get('learn', True)
+    save_settings()
+    
+    status = "включено" if settings['learn'] else "выключено"
+    bot.send_message(message.chat.id, f"📚 Обучение {status}")
+
+@bot.message_handler(commands=['reset'])
+def cmd_reset(message):
+    if not is_owner(message.from_user.id):
+        return
+    
+    global chains, replies, all_words
+    chains = {}
+    replies = {}
+    all_words = set()
+    save_brain()
+    bot.send_message(message.chat.id, "🗑 Память очищена")
 
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith('/'), content_types=['text'])
 def handle_message(message):
+    text = message.text
     chat_id = message.chat.id
-    text = message.text.lower().strip()
-    sender = message.from_user
     
-    triggered_word = None
-    response_template = None
+    learn_message(text)
     
-    for trigger, template in triggers.items():
-        trigger_lower = trigger.lower()
-        if re.search(rf'\b{re.escape(trigger_lower)}\b', text) or text.startswith(trigger_lower):
-            triggered_word = trigger
-            response_template = template
-            break
+    if message.reply_to_message and message.reply_to_message.text:
+        learn_reply(message.reply_to_message.text, text)
     
-    if triggered_word:
-        target = find_target_user(message)
-        if target:
-            response = response_template.replace("%user%", target)
+    should_reply = False
+    
+    bot_info = bot.get_me()
+    bot_username = bot_info.username.lower() if bot_info.username else ""
+    
+    if bot_username and bot_username in text.lower():
+        should_reply = True
+    
+    if message.reply_to_message:
+        if message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot_info.id:
+            should_reply = True
+    
+    if not should_reply:
+        chance = settings.get('reply_chance', 15)
+        if random.randint(1, 100) <= chance:
+            should_reply = True
+    
+    if should_reply and chains:
+        reply_from_memory = find_reply(text)
+        
+        if reply_from_memory and random.random() < 0.4:
+            response = reply_from_memory
+        else:
+            response = generate_response(text)
+        
+        if response:
+            time.sleep(random.uniform(0.5, 2))
             bot.send_message(chat_id, response)
     
-    last_messages[chat_id] = {
-        "user_id": sender.id,
-        "username": sender.username,
-        "first_name": sender.first_name,
-        "time": time.time()
-    }
+    maybe_save()
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
     data = call.data
     
-    if data == "triggers_list":
-        show_triggers_list(call.message.chat.id, call.message.message_id, is_callback=True)
-    
-    elif data == "help":
-        help_text = """❓ Как пользоваться:
-
-1. Ответ на сообщение — ответьте триггером
-2. Упоминание — обнял @username
-3. Последний в чате — просто триггер"""
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="menu"))
-        
-        bot.edit_message_text(help_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
-    
-    elif data == "menu":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📋 Список триггеров", callback_data="triggers_list"))
-        markup.add(types.InlineKeyboardButton("❓ Как пользоваться", callback_data="help"))
-        
-        if is_admin(user_id):
-            markup.add(types.InlineKeyboardButton("⚙️ Управление", callback_data="admin_panel"))
-        
+    if data == "stats":
+        bot.answer_callback_query(call.id)
         bot.edit_message_text(
-            f"🤖 Trigger Bot\n\n📊 Активных триггеров: {len(triggers)}",
+            f"📊 Статистика:\n\n"
+            f"📝 Слов: {len(all_words)}\n"
+            f"🔗 Связей: {len(chains)}\n"
+            f"💬 Шаблонов: {len(replies)}\n"
+            f"🎲 Шанс ответа: {settings.get('reply_chance', 15)}%\n"
+            f"📚 Обучение: {'✅' if settings.get('learn', True) else '❌'}",
             call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
+            call.message.message_id
         )
     
-    elif data == "admin_panel":
+    elif data == "settings":
         if not is_admin(user_id):
-            bot.answer_callback_query(call.id, "❌ Нет доступа!")
+            bot.answer_callback_query(call.id, "❌ Нет доступа")
             return
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("➕ Добавить триггер", callback_data="add_trigger"))
-        markup.add(types.InlineKeyboardButton("➖ Удалить триггер", callback_data="del_trigger"))
-        markup.add(types.InlineKeyboardButton("📋 Все триггеры", callback_data="triggers_list"))
+        
+        learn_status = "✅" if settings.get('learn', True) else "❌"
+        markup.add(types.InlineKeyboardButton(f"📚 Обучение: {learn_status}", callback_data="toggle_learn"))
+        
+        markup.add(types.InlineKeyboardButton(f"🎲 Шанс: {settings.get('reply_chance', 15)}%", callback_data="show_chance"))
         
         if is_owner(user_id):
-            markup.add(types.InlineKeyboardButton("👑 Управление админами", callback_data="admins"))
+            markup.add(types.InlineKeyboardButton("🗑 Очистить память", callback_data="confirm_reset"))
         
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="menu"))
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_main"))
         
         bot.edit_message_text(
-            f"⚙️ Панель управления\n\n📊 Триггеров: {len(triggers)}\n👥 Админов: {len(admin_ids)}",
+            "⚙️ Настройки",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
     
-    elif data == "add_trigger":
+    elif data == "toggle_learn":
         if not is_admin(user_id):
             return
         
-        user_states[user_id] = {'action': 'add_trigger_word'}
+        settings['learn'] = not settings.get('learn', True)
+        save_settings()
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="admin_panel"))
+        learn_status = "✅" if settings.get('learn', True) else "❌"
+        markup.add(types.InlineKeyboardButton(f"📚 Обучение: {learn_status}", callback_data="toggle_learn"))
+        markup.add(types.InlineKeyboardButton(f"🎲 Шанс: {settings.get('reply_chance', 15)}%", callback_data="show_chance"))
+        
+        if is_owner(user_id):
+            markup.add(types.InlineKeyboardButton("🗑 Очистить память", callback_data="confirm_reset"))
+        
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_main"))
         
         bot.edit_message_text(
-            "➕ Введите слово-триггер:",
+            "⚙️ Настройки",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
     
-    elif data == "del_trigger":
-        if not is_admin(user_id):
-            return
-        
-        markup = types.InlineKeyboardMarkup()
-        
-        for trigger in sorted(triggers.keys()):
-            markup.add(types.InlineKeyboardButton(f"❌ {trigger}", callback_data=f"deltrig_{trigger}"))
-        
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel"))
-        
-        bot.edit_message_text(
-            "➖ Выберите триггер для удаления:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
+    elif data == "show_chance":
+        bot.answer_callback_query(call.id, "Используй /chance 20 чтобы изменить")
     
-    elif data.startswith("deltrig_"):
-        if not is_admin(user_id):
-            return
-        
-        trigger_to_del = data[8:]
-        
-        if trigger_to_del in triggers:
-            del triggers[trigger_to_del]
-            save_triggers()
-            result = f"✅ Триггер «{trigger_to_del}» удалён!"
-        else:
-            result = "❌ Триггер не найден"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel"))
-        
-        bot.edit_message_text(result, call.message.chat.id, call.message.message_id, reply_markup=markup)
-    
-    elif data == "admins":
+    elif data == "confirm_reset":
         if not is_owner(user_id):
             return
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("➕ Добавить админа", callback_data="add_admin"))
-        markup.add(types.InlineKeyboardButton("➖ Удалить админа", callback_data="remove_admin"))
-        markup.add(types.InlineKeyboardButton("📋 Список", callback_data="list_admins"))
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admin_panel"))
+        markup.add(types.InlineKeyboardButton("✅ Да, очистить", callback_data="do_reset"))
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="settings"))
         
         bot.edit_message_text(
-            f"👑 Управление админами\n\nВсего: {len(admin_ids)}",
+            "⚠️ Точно очистить всю память?",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
     
-    elif data == "add_admin":
+    elif data == "do_reset":
         if not is_owner(user_id):
             return
         
-        user_states[user_id] = {'action': 'add_admin'}
+        global chains, replies, all_words
+        chains = {}
+        replies = {}
+        all_words = set()
+        save_brain()
+        
+        bot.answer_callback_query(call.id, "🗑 Память очищена")
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="admins"))
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="settings"))
         
         bot.edit_message_text(
-            "➕ Перешлите сообщение от нового админа или введите его ID:",
+            "🗑 Память очищена!",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
     
-    elif data == "remove_admin":
-        if not is_owner(user_id):
-            return
-        
-        user_states[user_id] = {'action': 'remove_admin'}
-        
+    elif data == "back_main":
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="admins"))
+        markup.add(types.InlineKeyboardButton("📊 Статистика", callback_data="stats"))
+        
+        if is_admin(user_id):
+            markup.add(types.InlineKeyboardButton("⚙️ Настройки", callback_data="settings"))
         
         bot.edit_message_text(
-            "➖ Введите ID админа для удаления:",
+            f"🧠 Я учусь на сообщениях в чатах и иногда отвечаю.\n\n"
+            f"📝 Выучено слов: {len(all_words)}\n"
+            f"🔗 Связей: {len(chains)}\n"
+            f"💬 Шаблонов ответов: {len(replies)}",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
         )
-    
-    elif data == "list_admins":
-        if not is_owner(user_id):
-            return
-        
-        text = "👑 Администраторы:\n\n🔒 Владельцы:\n"
-        for oid in OWNER_IDS:
-            text += f"  • {oid}\n"
-        
-        other_admins = [a for a in admin_ids if a not in OWNER_IDS]
-        if other_admins:
-            text += "\n👤 Админы:\n"
-            for aid in other_admins:
-                text += f"  • {aid}\n"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="admins"))
-        
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-def show_triggers_list(chat_id, message_id, is_callback=True):
-    if not triggers:
-        text = "📋 Список триггеров пуст"
-    else:
-        text = "📋 Список триггеров:\n\n"
-        for trigger, response in sorted(triggers.items()):
-            text += f"• {trigger} → {response}\n"
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="menu"))
-    
-    if is_callback and message_id:
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-    else:
-        bot.send_message(chat_id, text, reply_markup=markup)
 
 def run_bot():
     print("Bot starting...")
